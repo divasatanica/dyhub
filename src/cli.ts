@@ -2,8 +2,12 @@
  * DyHub CLI —— 命令行直接监听单个直播间
  *
  * 前台常驻：默认只输出弹幕（chat），不需要礼物事件、不需要登录、
- * 也不需要打开管理后台。进程退出（Ctrl-C / kill / 关闭终端）时会先
- * 断开房间、关闭 Chromium，再退出，不留后台浏览器进程。
+ * 也不需要打开管理后台。同时默认起一个独立的 WebSocket 服务
+ * （ws://host:port/ws?roomId=&types=，事件协议与 `npm run dev` 控制台模式一致），
+ * 方便弹幕墙 / 弹幕游戏等消费端直接接入；`--no-ws` 可关闭。
+ *
+ * 进程退出（Ctrl-C / kill / 关闭终端）时会先断开房间、关闭 WS 与 Chromium，
+ * 再退出，不留后台浏览器进程。
  *
  * 用法：
  *   npm run listen -- 708764876300
@@ -17,8 +21,10 @@
 import { BrowserManager } from './collector/browser.js';
 import { Collector } from './collector/collector.js';
 import * as accountStore from './collector/accountStore.js';
+import { EventBus } from './pipeline/eventBus.js';
 import { EventDeduplicator } from './pipeline/dedupe.js';
 import { normalize } from './pipeline/normalizer.js';
+import { startStandaloneWs, type StandaloneWsHandle } from './dispatch/standaloneWs.js';
 import { normalizeRoomIdInput } from './util/roomId.js';
 import type { RawProtoMessage } from './proto/douyin.proto.js';
 import type { ChatEvent, DanmakuEvent, DanmakuEventType } from './types/events.js';
@@ -39,10 +45,18 @@ const HELP = `DyHub 命令行监听 —— 前台常驻，默认只输出弹幕�
   --collector=browser|lightweight  采集内核（默认取 DYHUB_COLLECTOR，否则 browser）
   --types=chat,gift                输出的事件类型，逗号分隔（默认 chat，只要弹幕）
   --json                           每行输出完整事件 JSON，便于管道 / 落盘处理
+  --ws-port <端口>                 WS 监听端口（默认取 DYHUB_PORT，否则 8757；0 = 随机空闲端口）
+  --ws-host <地址>                 WS 监听地址（默认取 DYHUB_HOST，否则 0.0.0.0）
+  --no-ws                          不启动 WebSocket 服务，只输出到终端
   -h, --help                       显示本帮助
 
+WebSocket：
+  启动后 stderr 会打印可连接的 ws://<host>:<端口>/ws?roomId=<房间号>&types=<类型>。
+  客户端按自己连接的 ?roomId= / ?types= 过滤事件，参数与 npm run dev 控制台模式一致。
+  端口被占用时只告警、不影响终端输出，可用 --ws-port 换端口。
+
 退出：
-  Ctrl-C / kill / 关闭终端 → 先断开房间并关闭 Chromium，再退出进程。
+  Ctrl-C / kill / 关闭终端 → 先断开房间、关闭 WS 与 Chromium，再退出进程。
   退出码：0 正常（含直播结束），1 连接失败 / 运行错误，2 参数错误。
 `;
 
@@ -60,6 +74,11 @@ interface Options {
   types: DanmakuEventType[];
   json: boolean;
   help: boolean;
+  /** 是否启动独立 WS 服务（默认开，--no-ws 关） */
+  ws: boolean;
+  /** WS 监听端口；0 = 系统分配 */
+  wsPort: number;
+  wsHost: string;
 }
 
 // ---- 终端着色（仅 TTY，便于重定向到文件） ----
@@ -78,14 +97,29 @@ function parseFlagValue(argv: string[], index: number, arg: string): { value?: s
   return { value: undefined, next: index };
 }
 
+/** 端口校验：0-65535 的整数（0 = 由系统分配空闲端口） */
+function parsePort(raw: string, source: string): number {
+  const text = raw.trim();
+  const n = Number(text);
+  if (text === '' || !Number.isInteger(n) || n < 0 || n > 65535) {
+    throw new Error(`${source} 必须是 0-65535 的整数，收到「${raw}」`);
+  }
+  return n;
+}
+
 function parseArgs(argv: string[]): Options {
   const envCollector = (process.env.DYHUB_COLLECTOR ?? 'browser').trim().toLowerCase();
+  const envPort = (process.env.DYHUB_PORT ?? '').trim();
+  const envHost = (process.env.DYHUB_HOST ?? '').trim();
   const opts: Options = {
     roomId: '',
     collector: envCollector === 'lightweight' ? 'lightweight' : 'browser',
     types: ['chat'],
     json: false,
     help: false,
+    ws: true,
+    wsPort: envPort ? parsePort(envPort, 'DYHUB_PORT') : 8757,
+    wsHost: envHost || '0.0.0.0',
   };
   const positional: string[] = [];
 
@@ -119,6 +153,24 @@ function parseArgs(argv: string[]): Options {
         throw new Error(`未知事件类型：${bad.join(', ')}（可选：${ALL_TYPES.join(', ')}）`);
       }
       opts.types = list as DanmakuEventType[];
+      continue;
+    }
+    if (arg === '--no-ws') {
+      opts.ws = false;
+      continue;
+    }
+    if (arg === '--ws-port' || arg.startsWith('--ws-port=')) {
+      const { value, next } = parseFlagValue(argv, i, arg);
+      i = next;
+      opts.wsPort = parsePort(value ?? '', '--ws-port');
+      continue;
+    }
+    if (arg === '--ws-host' || arg.startsWith('--ws-host=')) {
+      const { value, next } = parseFlagValue(argv, i, arg);
+      i = next;
+      const host = (value ?? '').trim();
+      if (!host) throw new Error('--ws-host 不能为空，例如 --ws-host=127.0.0.1');
+      opts.wsHost = host;
       continue;
     }
     if (arg.startsWith('-')) throw new Error(`未知选项：${arg}`);
@@ -164,9 +216,10 @@ function printEvent(ev: DanmakuEvent, json: boolean): void {
 
 let collectorRef: Collector | null = null;
 let browserRef: BrowserManager | null = null;
+let wsRef: StandaloneWsHandle | null = null;
 let shuttingDown = false;
 
-/** 断开采集并关闭 Chromium 后退出；清理最多等 10s，避免卡死 */
+/** 断开采集、关闭 WS 与 Chromium 后退出；清理最多等 10s，避免卡死 */
 async function shutdown(code: number, message?: string): Promise<void> {
   if (shuttingDown) {
     // 用户二次中断（信号触发的 code 0）：不再等待清理，直接退出；
@@ -182,6 +235,11 @@ async function shutdown(code: number, message?: string): Promise<void> {
       await collectorRef?.disconnectAll();
     } catch {
       /* 会话可能已被页面关闭，忽略 */
+    }
+    try {
+      await wsRef?.close();
+    } catch {
+      /* ignore */
     }
     try {
       await browserRef?.close();
@@ -253,22 +311,41 @@ async function main(opts: Options): Promise<void> {
     process.stderr.write('[dyhub] 首次运行：已创建游客默认账号（弹幕无需登录）\n');
   }
 
+  // 采集 → 标准化 → 去重 → 总线；终端输出与 WS 分发是总线的两个订阅者
+  const bus = new EventBus();
   const dedupe = new EventDeduplicator(50_000);
-  const wanted = new Set<DanmakuEventType>(opts.types);
   const onMessage = (msg: RawProtoMessage, meta: { roomId: string }) => {
     const ev = normalize(msg, meta);
-    if (!ev || !wanted.has(ev.type)) return;
+    if (!ev) return;
     if (dedupe.isDuplicate(ev.id)) return;
-    printEvent(ev, opts.json);
+    bus.publish(ev);
   };
+  // 终端只输出 --types 指定的事件；WS 客户端按各自连接的 ?types= 过滤
+  bus.subscribe({ type: opts.types }, (ev) => printEvent(ev, opts.json));
+
+  // 房间状态变更 → roomStatus 事件（与服务端模式一致），WS 客户端可见
+  const onStatusChange = (roomId: string, status: string, error?: string) => {
+    bus.publish({
+      id: `rs_${roomId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      roomId,
+      platform: 'douyin',
+      type: 'roomStatus',
+      ts: Date.now(),
+      receivedAt: Date.now(),
+      data: { status, message: error },
+    });
+  };
+
   const onError = (roomId: string, err: Error) => process.stderr.write(`[dyhub] 房间 ${roomId} 采集错误：${err.message}\n`);
 
+  let collector: Collector;
   if (opts.collector === 'lightweight') {
     const { LightweightSession } = await import('./collector/lightweightSession.js');
-    collectorRef = new Collector({
+    collector = new Collector({
       createSession: (roomId, cookie) =>
         new LightweightSession(roomId, { onMessage, onError: (err) => onError(roomId, err), cookie }),
       onMessage: () => {},
+      onStatusChange,
     });
   } else {
     // DYHUB_HEADED 语义与 index.ts 一致：仅显式 1/true 时开有头
@@ -280,7 +357,28 @@ async function main(opts: Options): Promise<void> {
       handleSignals: false,
     });
     await browserRef.init();
-    collectorRef = new Collector({ browser: browserRef, onMessage });
+    collector = new Collector({ browser: browserRef, onMessage, onStatusChange });
+  }
+  collectorRef = collector;
+
+  // WS 服务先起：客户端可以在采集连接期间就接进来，事件到达后自动推送
+  if (opts.ws) {
+    try {
+      wsRef = await startStandaloneWs({
+        bus,
+        collector,
+        host: opts.wsHost,
+        port: opts.wsPort,
+        // 命令行只监听启动时指定的房间，不允许 WS 客户端再触发别的房间采集
+        autoConnect: false,
+      });
+      process.stderr.write(`· WS 事件流：${wsRef.url}?roomId=${opts.roomId}&types=${opts.types.join(',')}\n`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      process.stderr.write(`! WS 服务启动失败（${msg}），本次只输出到终端；可用 --ws-port 换端口\n`);
+    }
+  } else {
+    process.stderr.write('· WS 服务已关闭（--no-ws）\n');
   }
 
   process.stderr.write(`· 采集内核：${opts.collector}\n`);
@@ -288,7 +386,7 @@ async function main(opts: Options): Promise<void> {
   process.stderr.write(`· 正在连接直播间 ${opts.roomId} …\n`);
 
   try {
-    await collectorRef.connect(opts.roomId);
+    await collector.connect(opts.roomId);
   } catch (e) {
     await shutdown(1, `✗ 连接失败：${e instanceof Error ? e.message : String(e)}`);
     return;
@@ -296,7 +394,7 @@ async function main(opts: Options): Promise<void> {
   process.stderr.write(
     opts.collector === 'browser' ? '· 直播间页面已打开，等待弹幕通道…\n' : '· 已建立采集会话，等待弹幕通道…\n',
   );
-  startWatchdog(opts.roomId, collectorRef);
+  startWatchdog(opts.roomId, collector);
 
   // 常驻：不主动结束，直到信号或 watchdog 触发退出
   await new Promise<void>(() => {});

@@ -146,21 +146,35 @@ curl -X POST http://localhost:8757/api/rooms/connect \
 npm run listen -- 708764876300                                  # 浏览器内核（默认）
 DYHUB_COLLECTOR=lightweight npm run listen -- 708764876300      # 轻量内核，秒级连接
 npm run listen -- 'https://live.douyin.com/708764876300' --json # 每行一条完整事件 JSON
+npm run listen -- 708764876300 --ws-port 9000                   # 指定 WS 端口（默认 8757）
+npm run listen -- 708764876300 --no-ws                          # 只输出到终端，不起 WS
 npm run build && node dist/cli.js 708764876300                  # 生产模式
 ```
 
 输出形如（时间 + 昵称 + 弹幕内容，状态信息走 stderr）：
 
 ```
+· WS 事件流：ws://localhost:8757/ws?roomId=708764876300&types=chat
 16:33:41 🍄: 新鲜奶源配料干净，今日酸奶立享89折！
 16:33:49 半只柠檬: 保质期多久啊
 ```
 
-- **退出即断开**：Ctrl-C / kill / 关闭终端会先断开房间、关闭 Chromium，再退出进程，不留后台浏览器进程。退出码：`0` 正常（含直播结束），`1` 连接失败 / 运行错误，`2` 参数错误。
-- **事件类型**：默认只 `chat`；需要别的用 `--types=chat,gift`，非 chat 事件按 JSON 行输出。
+- **同时提供 WebSocket**：命令行模式默认另起一个独立的 WS 服务（**不启动管理台 / 管理 API**），事件与控制台模式同一套协议。客户端直接连启动时打印的地址：
+
+  ```js
+  const ws = new WebSocket('ws://localhost:8757/ws?roomId=708764876300&types=chat,gift');
+  ws.onmessage = (e) => console.log(JSON.parse(e.data));
+  ```
+
+  端口默认取 `DYHUB_PORT`（`8757`），可用 `--ws-port` / `--ws-host` 调整（`--ws-port 0` 交给系统分配）；被占用时只告警、不影响终端输出。`GET /health` 可探活。
+- **退出即断开**：Ctrl-C / kill / 关闭终端会先断开房间、关闭 WS 与 Chromium，再退出进程，不留后台浏览器进程。退出码：`0` 正常（含直播结束），`1` 连接失败 / 运行错误，`2` 参数错误。
+- **事件类型**：终端默认只 `chat`；需要别的用 `--types=chat,gift`，非 chat 事件按 JSON 行输出。WS 客户端则按自己连接的 `?types=` 过滤，与控制台模式一致。
+- **WS 只服务当前房间**：客户端传其他 `roomId` 会收到 `__error` 并断开，不会像控制台模式那样自动再开房间。
 - **礼物事件需要登录态 Cookie**，详见 [Cookie 配置指南](docs/cookie-guide.md)；只要弹幕可保持游客态。
 - 采集内核、Chrome 路径、Cookie、有头调试仍走同名环境变量（`DYHUB_COLLECTOR` / `DYHUB_CHROME` / `DYHUB_COOKIE` / `DYHUB_HEADED`）。
 - 一个进程只监听一个房间；多房间请起多个进程，或改用管理台。
+
+> 补充：如果不想起 CLI 进程，也可以让服务常驻后用 `ws://localhost:8757/ws?roomId=<房间号>` 或 `curl -N 'http://localhost:8757/api/events?roomId=<房间号>&types=chat'` 订阅——订阅端接入会自动触发采集。
 
 > 补充：如果不想起 CLI 进程，也可以让服务常驻后用 `ws://localhost:8757/ws?roomId=<房间号>` 或 `curl -N 'http://localhost:8757/api/events?roomId=<房间号>&types=chat'` 订阅——订阅端接入会自动触发采集。
 
@@ -168,7 +182,7 @@ npm run build && node dist/cli.js 708764876300                  # 生产模式
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `DYHUB_PORT` | 管理端口 | `8757` |
+| `DYHUB_PORT` | 管理端口；命令行模式的 WS 也默认用它 | `8757` |
 | `DYHUB_HOST` | 监听地址 | `0.0.0.0` |
 | `DYHUB_CHROME` | Chrome/Chromium 可执行文件路径 | 自动探测 |
 | `DYHUB_HEADED` | 设为 `1` 打开有头浏览器（调试用） | 无（默认无头） |
