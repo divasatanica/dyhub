@@ -14,22 +14,7 @@ import * as loginWindow from '../collector/loginWindow.js';
 import { EventBus } from '../pipeline/eventBus.js';
 import { WebhookDispatcher } from '../dispatch/webhook.js';
 import { registerSseRoute } from '../dispatch/sseServer.js';
-
-/**
- * 房间号归一化：兼容全角数字（中文输入法）、直接粘贴的直播间 URL、
- * 空格 / 零宽字符等噪声；返回纯 ASCII 数字串（无法识别时返回空串）。
- */
-function normalizeRoomIdInput(raw: unknown): string {
-  if (raw === null || raw === undefined) return '';
-  let s = String(raw);
-  // 全角数字 ０-９ → 半角
-  s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
-  // 粘贴了直播间链接：取 live.douyin.com/<数字> 尾号
-  const fromUrl = s.match(/live\.douyin\.com\/(\d+)/);
-  if (fromUrl) return fromUrl[1];
-  // 其余只保留数字
-  return s.replace(/\D/g, '');
-}
+import { normalizeRoomIdInput } from '../util/roomId.js';
 
 /** 发送弹幕后等它出现在推送流里的最长时间 */
 const CHAT_ECHO_TIMEOUT_MS = 8000;

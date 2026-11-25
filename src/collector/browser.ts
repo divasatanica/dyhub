@@ -59,6 +59,12 @@ export interface BrowserManagerOptions {
   userAgent?: string;
   /** 是否无头模式 */
   headless?: boolean;
+  /**
+   * 是否由 Playwright 接管 SIGINT / SIGTERM / SIGHUP（默认 true）。
+   * Playwright 的默认处理器会直接 close 浏览器并 process.exit(130)，
+   * 与宿主进程自己的优雅退出竞争；CLI 这类需要自己收尾的场景应传 false。
+   */
+  handleSignals?: boolean;
 }
 
 export interface OpenedRoom {
@@ -94,6 +100,7 @@ export class BrowserManager {
       executablePath: opts.executablePath ?? findChrome() ?? '',
       userAgent: opts.userAgent ?? DEFAULT_USER_AGENT,
       headless: opts.headless ?? true,
+      handleSignals: opts.handleSignals ?? true,
     };
   }
 
@@ -112,6 +119,9 @@ export class BrowserManager {
         this.browser = await chromium.launch({
           executablePath: exec,
           headless: this.opts.headless,
+          handleSIGINT: this.opts.handleSignals,
+          handleSIGTERM: this.opts.handleSignals,
+          handleSIGHUP: this.opts.handleSignals,
           args: [
             '--disable-blink-features=AutomationControlled',
             '--autoplay-policy=no-user-gesture-required',

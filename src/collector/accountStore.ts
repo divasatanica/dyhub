@@ -134,7 +134,7 @@ function loadAllFromDisk(): void {
       const acc = loadAccountFromDisk(id);
       if (acc) accounts.set(id, acc);
     }
-    if (accounts.size) console.log(`[dyhub] 已从 data/accounts/ 恢复 ${accounts.size} 个账号`);
+    if (accounts.size) console.error(`[dyhub] 已从 data/accounts/ 恢复 ${accounts.size} 个账号`);
   } catch {
     /* noop */
   }
@@ -186,7 +186,7 @@ function migrateFromLegacy(): void {
     console.warn('[dyhub] 迁移房间 cookie 失败:', (e as Error).message);
   }
 
-  if (migrated > 0) console.log(`[dyhub] 已从旧 cookie 数据迁移 ${migrated} 个账号`);
+  if (migrated > 0) console.error(`[dyhub] 已从旧 cookie 数据迁移 ${migrated} 个账号`);
 }
 
 // ---- 账号 CRUD ----
@@ -295,6 +295,6 @@ function applyEnvCookie(): void {
   let id = getDefaultAccountId();
   if (!id) id = createAccount('默认').id;
   setAccountCookie(id, envCookie, null);
-  console.log('[dyhub] 已应用 DYHUB_COOKIE 环境变量到默认账号');
+  console.error('[dyhub] 已应用 DYHUB_COOKIE 环境变量到默认账号');
 }
 applyEnvCookie();

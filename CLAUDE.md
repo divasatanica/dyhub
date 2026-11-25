@@ -13,6 +13,7 @@ npm install              # 安装依赖
 npm run dev              # 开发模式（tsx 直接运行 TS，免编译）
 npm run build            # 编译 TS + 拷贝 UI 到 dist/
 npm start                # 生产模式（node dist/index.js）
+npm run listen -- <房间号>  # 命令行监听单个直播间（前台常驻，默认只输出弹幕；Ctrl-C 退出即断开）
 npm run typecheck        # 仅类型检查，不产出文件
 ```
 
@@ -32,7 +33,7 @@ docker compose up -d --build   # 一键启动（内置 Chromium + 中文字体�
 采集内核 → normalize() → dedupe → EventBus → WS/SSE/Webhook 分发
 ```
 
-入口 `src/index.ts` 装配整条链路。采集内核产出 `RawProtoMessage`，经 `normalize()` 翻译为 `DanmakuEvent`，去重后发布到 `EventBus`，三个分发器各自订阅总线并按 filter 推送给消费端。
+入口 `src/index.ts` 装配整条链路。`src/cli.ts` 是另一条精简入口：`npm run listen -- <房间号>` 复用同一套 `Collector` + `normalize()`，不启 Fastify，只把事件打到 stdout（默认仅 chat），退出时断开房间并关闭 Chromium。采集内核产出 `RawProtoMessage`，经 `normalize()` 翻译为 `DanmakuEvent`，去重后发布到 `EventBus`，三个分发器各自订阅总线并按 filter 推送给消费端。
 
 ### 分层职责
 
@@ -52,6 +53,7 @@ docker compose up -d --build   # 一键启动（内置 Chromium + 中文字体�
   - `wsServer.ts` — WebSocket 实时推送（`/ws?roomId=&types=`），复用 Fastify 的 HTTP server。
   - `sseServer.ts` — SSE 推送（`/api/events?roomId=&types=`），15s 心跳防代理断开。
   - `webhook.ts` — Webhook 投递，HMAC-SHA256 签名（`X-DyHub-Signature` 头），5s 超时。
+- **`src/cli.ts`** — 命令行监听入口（`npm run listen -- <roomId>`）。默认浏览器内核、只输出 `chat` 事件；`--collector` / `--types` / `--json` 可调。退出（SIGINT/SIGTERM/SIGHUP）时 `disconnectAll()` + `browser.close()` 后再退出，退出码 0/1/2（正常 / 失败 / 参数错误）。浏览器内核通过 `BrowserManager({ handleSignals: false })` 关闭 Playwright 自带的信号处理器，避免它抢先 `process.exit(130)` 打断清理。
 - **`src/api/server.ts`** — Fastify 管理 API（控制面）。房间管理、Webhook 管理、统计、SSE 路由注册、控制台静态资源。`normalizeRoomIdInput` 兼容全角数字 / 直播间 URL / 噪声输入。
 - **`src/ui/dashboard.html`** — 控制台单页应用（纯 HTML，无框架）。
 
@@ -90,3 +92,4 @@ docker compose up -d --build   # 一键启动（内置 Chromium + 中文字体�
 - `spike/` 为本地研究脚本（含真实抓包参数），已 gitignore，不入库。
 - Docker 部署需 `--shm-size=2g`（Chromium 渲染依赖共享内存），compose 已内置。
 - `DYHUB_HEADED` 仅当显式等于 `1`/`true` 时开有头；不能用 `!process.env.DYHUB_HEADED` 判断（字符串 `"0"`/`"false"` 也是 truthy）。
+- Playwright 的 `chromium.launch` 默认自带 SIGINT/SIGTERM 处理器（close 浏览器后 `process.exit(130)`），会与调用方自己的优雅退出竞争。`BrowserManager` 新增 `handleSignals` 选项（默认 `true`，CLI 传 `false`）；宿主进程若需要自己清理，务必关掉它。

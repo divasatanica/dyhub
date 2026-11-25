@@ -138,6 +138,32 @@ curl -X POST http://localhost:8757/api/rooms/connect \
 
 控制台左侧可连接多个房间，通过「查看房间」下拉在**全部房间混流**与**单房间**之间切换；事件行展示头像、事件类型、来源房间与昵称。
 
+### 命令行监听（不用控制台）
+
+只想拿某个直播间的弹幕、不跑管理界面时，用一条命令前台常驻监听。默认**只输出弹幕事件（chat）**，不需要登录：
+
+```bash
+npm run listen -- 708764876300                                  # 浏览器内核（默认）
+DYHUB_COLLECTOR=lightweight npm run listen -- 708764876300      # 轻量内核，秒级连接
+npm run listen -- 'https://live.douyin.com/708764876300' --json # 每行一条完整事件 JSON
+npm run build && node dist/cli.js 708764876300                  # 生产模式
+```
+
+输出形如（时间 + 昵称 + 弹幕内容，状态信息走 stderr）：
+
+```
+16:33:41 🍄: 新鲜奶源配料干净，今日酸奶立享89折！
+16:33:49 半只柠檬: 保质期多久啊
+```
+
+- **退出即断开**：Ctrl-C / kill / 关闭终端会先断开房间、关闭 Chromium，再退出进程，不留后台浏览器进程。退出码：`0` 正常（含直播结束），`1` 连接失败 / 运行错误，`2` 参数错误。
+- **事件类型**：默认只 `chat`；需要别的用 `--types=chat,gift`，非 chat 事件按 JSON 行输出。
+- **礼物事件需要登录态 Cookie**，详见 [Cookie 配置指南](docs/cookie-guide.md)；只要弹幕可保持游客态。
+- 采集内核、Chrome 路径、Cookie、有头调试仍走同名环境变量（`DYHUB_COLLECTOR` / `DYHUB_CHROME` / `DYHUB_COOKIE` / `DYHUB_HEADED`）。
+- 一个进程只监听一个房间；多房间请起多个进程，或改用管理台。
+
+> 补充：如果不想起 CLI 进程，也可以让服务常驻后用 `ws://localhost:8757/ws?roomId=<房间号>` 或 `curl -N 'http://localhost:8757/api/events?roomId=<房间号>&types=chat'` 订阅——订阅端接入会自动触发采集。
+
 ### 环境变量
 
 | 变量 | 说明 | 默认 |
