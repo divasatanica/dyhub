@@ -12,8 +12,12 @@ import type {
   DanmakuUser,
   GiftEvent,
   ChatEvent,
-} from '../types/events.js';
-import { decodeMessageBody, longToStr, type RawProtoMessage } from '../proto/douyin.proto.js';
+} from "../types/events.js";
+import {
+  decodeMessageBody,
+  longToStr,
+  type RawProtoMessage,
+} from "../proto/douyin.proto.js";
 
 function toUser(body: any): DanmakuUser | undefined {
   const u = body?.user;
@@ -22,12 +26,14 @@ function toUser(body: any): DanmakuUser | undefined {
   if (!id) return undefined;
   return {
     id,
-    nickname: u.nickName || '',
+    nickname: u.nickName || "",
     avatar: extractAvatar(u),
     secUid: u.secUid || undefined,
     payLevel: u.payGrade ? Number(longToStr(u.payGrade.level) || 0) : undefined,
     fansClub: toFansClub(u.fansClub?.data),
-    badges: toBadges(u.newBadgeImageList?.length ? u.newBadgeImageList : u.badgeImageList),
+    badges: toBadges(
+      u.newBadgeImageList?.length ? u.newBadgeImageList : u.badgeImageList,
+    ),
   };
 }
 
@@ -41,13 +47,16 @@ const SUBSCRIBE_BADGE = 59;
 function toBadges(images: any[] | undefined): string[] | undefined {
   const badges: string[] = [];
   for (const image of images ?? []) {
-    const url = firstUrl(image?.urlList) ?? String(image?.uri ?? '');
-    if (Number(image?.imageType) === SUBSCRIBE_BADGE || /\/subscribe_/.test(url)) {
-      badges.push(/yearly/.test(url) ? 'V年' : 'V');
+    const url = firstUrl(image?.urlList) ?? String(image?.uri ?? "");
+    if (
+      Number(image?.imageType) === SUBSCRIBE_BADGE ||
+      /\/subscribe_/.test(url)
+    ) {
+      badges.push(/yearly/.test(url) ? "V年" : "V");
       continue;
     }
-    const text = String(image?.content?.alternativeText ?? '').trim();
-    if (text && text !== '勋章') badges.push(text);
+    const text = String(image?.content?.alternativeText ?? "").trim();
+    if (text && text !== "勋章") badges.push(text);
   }
   const unique = [...new Set(badges)];
   return unique.length ? unique : undefined;
@@ -56,7 +65,7 @@ function toBadges(images: any[] | undefined): string[] | undefined {
 /** 粉丝团：名称为空且等级为 0 视为未加入，不输出。 */
 function toFansClub(d: any): DanmakuFansClub | undefined {
   if (!d) return undefined;
-  const name = String(d.clubName ?? '');
+  const name = String(d.clubName ?? "");
   const level = Number(d.level ?? 0);
   if (!name && !level) return undefined;
   return {
@@ -70,7 +79,9 @@ function toFansClub(d: any): DanmakuFansClub | undefined {
 /** URL 列表中首个 http(s) 地址 */
 function firstUrl(urls: unknown): string | undefined {
   if (!Array.isArray(urls)) return undefined;
-  return urls.find((u): u is string => typeof u === 'string' && u.startsWith('http'));
+  return urls.find(
+    (u): u is string => typeof u === "string" && u.startsWith("http"),
+  );
 }
 
 /**
@@ -84,9 +95,10 @@ function toParts(text: any): ChatPart[] | undefined {
     const url = firstUrl(image?.urlList);
     if (url) {
       parts.push({
-        type: 'emote',
+        type: "emote",
         url,
-        name: image.content?.name || image.content?.alternativeText || undefined,
+        name:
+          image.content?.name || image.content?.alternativeText || undefined,
         width: Number(longToStr(image.width) || 0) || undefined,
         height: Number(longToStr(image.height) || 0) || undefined,
       });
@@ -95,13 +107,14 @@ function toParts(text: any): ChatPart[] | undefined {
     const user = piece.userValue?.user;
     if (user) {
       parts.push({
-        type: 'mention',
-        text: `@${user.nickName || ''}`,
+        type: "mention",
+        text: `@${user.nickName || ""}`,
         userId: user.idStr || longToStr(user.id) || undefined,
       });
       continue;
     }
-    if (piece.stringValue) parts.push({ type: 'text', text: String(piece.stringValue) });
+    if (piece.stringValue)
+      parts.push({ type: "text", text: String(piece.stringValue) });
   }
   return parts.length ? parts : undefined;
 }
@@ -112,9 +125,14 @@ function toParts(text: any): ChatPart[] | undefined {
  * 取不到则回退到 avatarMedium / avatarLarge。
  */
 function extractAvatar(u: any): string | undefined {
-  for (const field of ['avatarThumb', 'avatarMedium', 'avatarLarge']) {
+  for (const field of ["avatarThumb", "avatarMedium", "avatarLarge"]) {
     const urls = u[field]?.urlList;
-    if (Array.isArray(urls) && urls.length && typeof urls[0] === 'string' && urls[0].startsWith('http')) {
+    if (
+      Array.isArray(urls) &&
+      urls.length &&
+      typeof urls[0] === "string" &&
+      urls[0].startsWith("http")
+    ) {
       return urls[0];
     }
   }
@@ -126,7 +144,7 @@ function extractAvatar(u: any): string | undefined {
 // 避免与消息体里的内部 webcast 房间号不一致导致过滤失配。
 function createTime(body: any): number {
   const t = body?.common?.createTime;
-  const n = typeof t === 'bigint' ? Number(t) : Number(t ?? 0);
+  const n = typeof t === "bigint" ? Number(t) : Number(t ?? 0);
   // 0 / 无效时回退到当前时间
   if (!Number.isFinite(n) || n <= 0) return Date.now();
   // 抖音的 createTime 有时是秒、有时是毫秒（同一礼物的两条消息就可能不同），统一为毫秒
@@ -137,15 +155,21 @@ function createTime(body: any): number {
  * 把一条抖音原始消息标准化为统一事件。
  * @returns 标准化事件；无法识别的消息返回 unknown 事件（透传），解析失败返回 null
  */
-export function normalize(msg: RawProtoMessage, meta: { roomId: string }): DanmakuEvent | null {
+export function normalize(
+  msg: RawProtoMessage,
+  meta: { roomId: string },
+): DanmakuEvent | null {
   const decoded = decodeMessageBody(msg);
+
   if (!decoded) {
     // 未声明的消息类型：透传为 unknown，保留原始载荷供调试
     return {
-      id: msg.msgId || `${meta.roomId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      id:
+        msg.msgId ||
+        `${meta.roomId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       roomId: meta.roomId,
-      platform: 'douyin',
-      type: 'unknown',
+      platform: "douyin",
+      type: "unknown",
       ts: Date.now(),
       receivedAt: Date.now(),
       rawMethod: msg.method,
@@ -157,7 +181,7 @@ export function normalize(msg: RawProtoMessage, meta: { roomId: string }): Danma
   const base = {
     id: msg.msgId || decoded.msgId,
     roomId: meta.roomId,
-    platform: 'douyin' as const,
+    platform: "douyin" as const,
     ts: createTime(body),
     receivedAt: Date.now(),
     user: toUser(body),
@@ -165,26 +189,26 @@ export function normalize(msg: RawProtoMessage, meta: { roomId: string }): Danma
   };
 
   switch (decoded.method) {
-    case 'WebcastChatMessage': {
+    case "WebcastChatMessage": {
       const ev: ChatEvent = {
         ...base,
-        type: 'chat',
+        type: "chat",
         data: {
-          content: String(body.content ?? ''),
+          content: String(body.content ?? ""),
           parts: toParts(body.rtfContentV2) ?? toParts(body.rtfContent),
         },
       };
       return ev;
     }
-    case 'WebcastEmojiChatMessage': {
+    case "WebcastEmojiChatMessage": {
       // 会员表情 / 大表情：以 chat 事件下发，parts 只有这一张图，content 为抖音给的文字替代。
       const parts = toParts(body.emojiContent);
-      const name = parts?.find((p) => p.type === 'emote')?.name;
+      const name = parts?.find((p) => p.type === "emote")?.name;
       const ev: ChatEvent = {
         ...base,
-        type: 'chat',
+        type: "chat",
         data: {
-          content: String(body.defaultContent || name || ''),
+          content: String(body.defaultContent || name || ""),
           parts,
           sticker: true,
           emojiId: longToStr(body.emojiId) || undefined,
@@ -192,17 +216,20 @@ export function normalize(msg: RawProtoMessage, meta: { roomId: string }): Danma
       };
       return ev;
     }
-    case 'WebcastGiftMessage': {
+    case "WebcastGiftMessage": {
       const gift = body.gift;
       const iconUrls = gift?.icon?.urlList ?? gift?.image?.urlList;
       const ev: GiftEvent = {
         ...base,
-        type: 'gift',
+        type: "gift",
         data: {
           giftId: longToStr(body.giftId || gift?.id),
-          giftName: gift?.name || '',
+          giftName: gift?.name || "",
           giftIcon:
-            Array.isArray(iconUrls) && iconUrls.length && typeof iconUrls[0] === 'string' && iconUrls[0].startsWith('http')
+            Array.isArray(iconUrls) &&
+            iconUrls.length &&
+            typeof iconUrls[0] === "string" &&
+            iconUrls[0].startsWith("http")
               ? iconUrls[0]
               : undefined,
           diamondCount: Number(gift?.diamondCount ?? 0),
@@ -218,20 +245,31 @@ export function normalize(msg: RawProtoMessage, meta: { roomId: string }): Danma
       };
       return ev;
     }
-    case 'WebcastMemberMessage':
-      return { ...base, type: 'member', data: { memberCount: Number(body.memberCount ?? 0) } };
-    case 'WebcastLikeMessage':
+    case "WebcastMemberMessage":
       return {
         ...base,
-        type: 'like',
-        data: { count: Number(body.count ?? 0), total: Number(body.total ?? 0) },
+        type: "member",
+        data: { memberCount: Number(body.memberCount ?? 0) },
       };
-    case 'WebcastSocialMessage':
-      return { ...base, type: 'follow', data: { action: Number(body.action ?? 0) } };
-    case 'WebcastRoomUserSeqMessage':
+    case "WebcastLikeMessage":
       return {
         ...base,
-        type: 'room',
+        type: "like",
+        data: {
+          count: Number(body.count ?? 0),
+          total: Number(body.total ?? 0),
+        },
+      };
+    case "WebcastSocialMessage":
+      return {
+        ...base,
+        type: "follow",
+        data: { action: Number(body.action ?? 0) },
+      };
+    case "WebcastRoomUserSeqMessage":
+      return {
+        ...base,
+        type: "room",
         data: {
           total: Number(body.total ?? 0),
           popularity: Number(body.popularity ?? 0),
@@ -241,7 +279,7 @@ export function normalize(msg: RawProtoMessage, meta: { roomId: string }): Danma
     default:
       return {
         ...base,
-        type: 'unknown',
+        type: "unknown",
         data: { method: decoded.method },
       };
   }
